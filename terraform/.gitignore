@@ -1,0 +1,67 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+*.tfplan
+
+# Sensitive configuration files
+terraform.tfvars
+*.auto.tfvars
+*.auto.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Legacy files from previous configurations
+sp_output.json
+
+# Environment files
+*.env
+azure_sp.env
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+terraform.log
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Backup files
+*.backup
+*.bak
+*.tmp
+
+# Certificate files
+*.pem
+*.p12
+*.pfx
+*.crt
+*.key
+
+# Azure CLI files
+.azure/

@@ -1,0 +1,46 @@
+# =============================================================================
+# PREFERRED: Use Environment Variables (more secure)
+# =============================================================================
+# export TF_VAR_azure_tenant_id="your-azure-tenant-id"
+# export TF_VAR_azure_subscription_id="your-azure-subscription-id"
+# export TF_VAR_azuredevops_personal_access_token="your-ado-personal-access-token"
+#
+# Then run: terraform apply
+# These values are marked as sensitive to minimize exposure!
+
+# =============================================================================
+# ALTERNATIVE: Set values in this file (less secure)
+# =============================================================================
+# Azure Configuration (optional if using environment variables above)
+# azure_tenant_id       = "your-azure-tenant-id"
+# azure_subscription_id = "your-azure-subscription-id"
+
+# Azure DevOps Configuration
+azuredevops_org_service_url = "https://dev.azure.com/your-organization"
+# azuredevops_personal_access_token = "your-ado-personal-access-token" # or use ADO_PAT env var
+azuredevops_project_name          = "vault-integration"
+project_visibility                = "private"
+
+# Service Connection Configuration
+service_endpoint_name = "AzureRM Service Connection for Vault with Automatic WIF"
+
+# HashiCorp Vault Configuration (optional - can use environment variables instead)
+# vault_address = "https://your-vault-server.com:8200"
+# vault_token   = "your-vault-admin-token"
+
+# =============================================================================
+# How to get these values:
+# =============================================================================
+# 
+# ARM_TENANT_ID: az account show --query tenantId -o tsv
+# ARM_SUBSCRIPTION_ID: az account show --query id -o tsv
+# ADO_PAT: Create in Azure DevOps > User Settings > Personal Access Tokens
+# 
+# azuredevops_org_service_url: Your Azure DevOps organization URL
+#
+# Example environment setup:
+# export TF_VAR_azure_tenant_id=$(az account show --query tenantId -o tsv)
+# export TF_VAR_azure_subscription_id=$(az account show --query id -o tsv)  
+# export TF_VAR_azuredevops_personal_access_token="your-created-pat-token"
+# export VAULT_ADDR="https://your-vault-server.com:8200"
+# export VAULT_TOKEN="your-vault-admin-token"

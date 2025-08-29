@@ -1,1 +1,57 @@
+# Project-specific sensitive files
 azure_env.txt
+notes.md
+
+# Python virtual environments
+venv/
+.venv/
+env/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Backup files
+*.backup
+*.bak
+*.tmp
+
+# Environment files
+*.env
+.env
+.env.local
+.env.*.local
+
+# Certificate files
+*.pem
+*.p12
+*.pfx
+*.crt
+*.key
+
+# Azure CLI files
+.azure/
+
+# Terraform files (in case they're created at root level)
+*.tfstate
+*.tfstate.*
+*.tfvars
+terraform.tfplan
