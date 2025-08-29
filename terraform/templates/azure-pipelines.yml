@@ -1,0 +1,182 @@
+# Azure DevOps Pipeline with HashiCorp Vault Integration
+# This pipeline demonstrates passwordless authentication to Vault using Workload Identity Federation
+
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Vault configuration - these should be set in pipeline variables or variable groups
+  VAULT_ADDR: 'https://your-vault-server.com:8200'
+  VAULT_NAMESPACE: '' # Set if using Vault Enterprise namespaces
+  
+stages:
+- stage: VaultIntegration
+  displayName: 'Vault Authentication Demo'
+  jobs:
+  - job: VaultAuth
+    displayName: 'Authenticate with Vault and Retrieve Secrets'
+    steps:
+    
+    # Step 1: Get Azure DevOps JWT token for Vault authentication
+    - task: AzureCLI@2
+      displayName: 'Authenticate with Vault using JWT'
+      inputs:
+        azureSubscription: '${service_connection_name}'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          echo "##[section]Starting Vault authentication process..."
+          
+          # Get the Azure DevOps JWT token from the service connection
+          ADO_JWT_TOKEN=$(cat $AZURE_ACCESS_TOKEN)
+          
+          if [ -z "$ADO_JWT_TOKEN" ]; then
+            echo "##[error]Failed to get Azure DevOps JWT token"
+            exit 1
+          fi
+          
+          echo "##[section]Authenticating with Vault..."
+          
+          # Authenticate with Vault using JWT auth method
+          VAULT_RESPONSE=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"jwt\":\"$ADO_JWT_TOKEN\",\"role\":\"${vault_role_name}\"}" \
+            "$VAULT_ADDR/v1/auth/${vault_auth_path}/login")
+          
+          if [ $? -ne 0 ]; then
+            echo "##[error]Failed to authenticate with Vault"
+            echo "$VAULT_RESPONSE"
+            exit 1
+          fi
+          
+          # Extract the Vault token from the response
+          VAULT_TOKEN=$(echo "$VAULT_RESPONSE" | jq -r '.auth.client_token')
+          
+          if [ "$VAULT_TOKEN" = "null" ] || [ -z "$VAULT_TOKEN" ]; then
+            echo "##[error]Failed to extract Vault token from response"
+            echo "Response: $VAULT_RESPONSE"
+            exit 1
+          fi
+          
+          echo "##[section]Successfully authenticated with Vault!"
+          
+          # Set the Vault token as a pipeline variable for subsequent steps
+          echo "##vso[task.setvariable variable=VAULT_TOKEN;isSecret=true]$VAULT_TOKEN"
+          
+          # Verify token works by getting token info
+          TOKEN_INFO=$(curl -s -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/auth/token/lookup-self")
+          
+          if [ $? -eq 0 ]; then
+            echo "##[section]Token validation successful"
+            echo "Token policies: $(echo "$TOKEN_INFO" | jq -r '.data.policies[]' | tr '\n' ' ')"
+            echo "Token TTL: $(echo "$TOKEN_INFO" | jq -r '.data.ttl')"
+          else
+            echo "##[warning]Could not validate token, but authentication appeared successful"
+          fi
+
+    # Step 2: Demonstrate reading a secret from Vault
+    - task: Bash@3
+      displayName: 'Read Secret from Vault'
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "##[section]Reading secret from Vault..."
+          
+          if [ -z "$VAULT_TOKEN" ]; then
+            echo "##[error]VAULT_TOKEN not available from previous step"
+            exit 1
+          fi
+          
+          # Example: Read a secret from the KV v2 secrets engine
+          # Adjust the path according to your Vault setup
+          SECRET_PATH="secret/data/demo"
+          
+          SECRET_RESPONSE=$(curl -s -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/$SECRET_PATH")
+          
+          if [ $? -ne 0 ]; then
+            echo "##[error]Failed to read secret from Vault"
+            exit 1
+          fi
+          
+          # Check if the secret exists
+          if echo "$SECRET_RESPONSE" | jq -e '.data.data' > /dev/null 2>&1; then
+            echo "##[section]Successfully retrieved secret from path: $SECRET_PATH"
+            
+            # Example: Extract a specific key from the secret (be careful with sensitive data)
+            # In a real pipeline, you would use these secrets securely, not echo them
+            if echo "$SECRET_RESPONSE" | jq -e '.data.data.example_key' > /dev/null 2>&1; then
+              echo "##[section]Found 'example_key' in secret"
+              # Set as pipeline variable for use in other steps
+              EXAMPLE_VALUE=$(echo "$SECRET_RESPONSE" | jq -r '.data.data.example_key')
+              echo "##vso[task.setvariable variable=EXAMPLE_SECRET;isSecret=true]$EXAMPLE_VALUE"
+            fi
+          else
+            echo "##[warning]Secret not found at path: $SECRET_PATH"
+            echo "##[section]This is expected if you haven't created the demo secret yet"
+            echo "##[section]To create a demo secret, run: vault kv put secret/demo example_key=example_value"
+          fi
+
+    # Step 3: Demonstrate using the secret in a deployment or other task
+    - task: Bash@3
+      displayName: 'Use Secret in Deployment'
+      condition: ne(variables['EXAMPLE_SECRET'], '')
+      inputs:
+        targetType: 'inline'
+        script: |
+          echo "##[section]Using secret in deployment..."
+          
+          # In a real scenario, you would use the secret for:
+          # - Database connection strings
+          # - API keys
+          # - Certificates
+          # - Other sensitive configuration
+          
+          if [ ! -z "$EXAMPLE_SECRET" ]; then
+            echo "##[section]Secret is available for use in deployment"
+            # Use the secret here (don't echo it in real deployments!)
+            # Example: export DATABASE_PASSWORD="$EXAMPLE_SECRET"
+          else
+            echo "##[warning]No secret available from Vault"
+          fi
+
+    # Step 4: Clean up (revoke token for security)
+    - task: Bash@3
+      displayName: 'Revoke Vault Token'
+      condition: always()
+      inputs:
+        targetType: 'inline'
+        script: |
+          if [ ! -z "$VAULT_TOKEN" ]; then
+            echo "##[section]Revoking Vault token for security..."
+            curl -s -X POST -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/auth/token/revoke-self"
+            echo "##[section]Token revoked successfully"
+          fi
+
+# Additional stage for demonstration - using secrets across stages
+- stage: UseSecrets
+  displayName: 'Use Secrets in Deployment'
+  dependsOn: VaultIntegration
+  condition: succeeded()
+  jobs:
+  - deployment: DeployWithSecrets
+    displayName: 'Deploy Application with Vault Secrets'
+    environment: 'development'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: Bash@3
+            displayName: 'Simulate Deployment'
+            inputs:
+              targetType: 'inline'
+              script: |
+                echo "##[section]Simulating application deployment..."
+                echo "##[section]In a real deployment, this would:"
+                echo "- Use database credentials from Vault"
+                echo "- Configure API keys from Vault"
+                echo "- Set up TLS certificates from Vault"
+                echo "- Deploy application with secure configuration"
+                echo "##[section]Deployment simulation complete!"
