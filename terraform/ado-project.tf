@@ -84,3 +84,25 @@ resource "azuredevops_pipeline_authorization" "vault_pipeline_env_auth" {
   type        = "environment"
   pipeline_id = azuredevops_build_definition.vault_integration_pipeline.id
 }
+
+# Grant pipeline permission to use the service connection
+resource "azuredevops_pipeline_authorization" "vault_pipeline_serviceconnection_auth" {
+  project_id  = azuredevops_project.vault_integration.id
+  resource_id = azuredevops_serviceendpoint_azurerm.automatic.id
+  type        = "endpoint"
+  pipeline_id = azuredevops_build_definition.vault_integration_pipeline.id
+}
+
+# Get the Default agent queue for this project
+data "azuredevops_agent_queue" "default" {
+  project_id = azuredevops_project.vault_integration.id
+  name       = "Default"
+}
+
+# Grant pipeline permission to use the Default agent queue
+resource "azuredevops_pipeline_authorization" "vault_pipeline_agentqueue_auth" {
+  project_id  = azuredevops_project.vault_integration.id
+  resource_id = data.azuredevops_agent_queue.default.id
+  type        = "queue"
+  pipeline_id = azuredevops_build_definition.vault_integration_pipeline.id
+}

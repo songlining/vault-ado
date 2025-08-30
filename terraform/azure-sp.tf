@@ -63,8 +63,7 @@ resource "azuread_application_federated_identity_credential" "vault_ado_federate
   
   # Azure DevOps issuer pattern for federated authentication
   issuer              = "https://login.microsoftonline.com/${var.azure_tenant_id}/v2.0"
-  # subject             = "sc://${split("/", var.azuredevops_org_service_url)[3]}/${azuredevops_project.vault_integration.name}/${var.service_endpoint_name}"
-  subject             = "sc://songlining/vault-wif-ktdlr0/AzureRM Service Connection for Vault with Automatic WIF"
+  subject             = azuredevops_serviceendpoint_azurerm.automatic.workload_identity_federation_subject
   audiences           = ["api://AzureADTokenExchange"]
   
   depends_on = [
@@ -76,8 +75,7 @@ resource "azuread_application_federated_identity_credential" "vault_ado_federate
 # Wait for propagation
 resource "time_sleep" "wait_for_sp_propagation" {
   depends_on = [
-    azurerm_role_assignment.vault_sp_owner,
-    azuread_application_federated_identity_credential.vault_ado_federated_credential
+    azurerm_role_assignment.vault_sp_owner
   ]
   create_duration = "60s"
 }
