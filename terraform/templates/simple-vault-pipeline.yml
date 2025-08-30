@@ -1,0 +1,62 @@
+# Simple Azure DevOps Pipeline with Vault Integration
+# This is a minimal example for quick testing
+
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  VAULT_ADDR: 'https://your-vault-server.com:8200'
+  
+jobs:
+- job: VaultDemo
+  displayName: 'Simple Vault Integration Demo'
+  steps:
+  
+  - task: AzureCLI@2
+    displayName: 'Get Secret from Vault'
+    inputs:
+      azureSubscription: '${service_connection_name}'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        # Install jq if needed
+        sudo apt-get update && sudo apt-get install -y jq
+        
+        # Get Azure DevOps JWT token
+        ADO_JWT_TOKEN=$(cat $AZURE_ACCESS_TOKEN)
+        
+        # Authenticate with Vault
+        echo "Authenticating with Vault..."
+        VAULT_RESPONSE=$(curl -s -X POST \
+          -H "Content-Type: application/json" \
+          -d "{\"jwt\":\"$ADO_JWT_TOKEN\",\"role\":\"${vault_role_name}\"}" \
+          "$VAULT_ADDR/v1/auth/${vault_auth_path}/login")
+        
+        # Extract token
+        VAULT_TOKEN=$(echo "$VAULT_RESPONSE" | jq -r '.auth.client_token')
+        
+        if [ "$VAULT_TOKEN" != "null" ] && [ -n "$VAULT_TOKEN" ]; then
+          echo "Successfully authenticated with Vault!"
+          
+          # Read demo secret
+          SECRET_RESPONSE=$(curl -s -H "X-Vault-Token: $VAULT_TOKEN" \
+            "$VAULT_ADDR/v1/secret/data/demo")
+          
+          if echo "$SECRET_RESPONSE" | jq -e '.data.data' > /dev/null; then
+            echo "Successfully retrieved secret from Vault!"
+            echo "Available keys: $(echo "$SECRET_RESPONSE" | jq -r '.data.data | keys[]')"
+          else
+            echo "No secret found - this is expected if demo secret hasn't been created"
+          fi
+          
+          # Revoke token
+          curl -s -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            "$VAULT_ADDR/v1/auth/token/revoke-self"
+        else
+          echo "Failed to authenticate with Vault"
+          echo "Response: $VAULT_RESPONSE"
+          exit 1
+        fi

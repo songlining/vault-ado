@@ -1,0 +1,63 @@
+# Debug Pipeline to Inspect JWT Token
+# This pipeline just prints the JWT token content for verification
+
+trigger:
+- main
+
+pool: Default
+
+jobs:
+- job: JWTDebug
+  displayName: 'Debug JWT Token'
+  steps:
+  
+  - task: AzureCLI@2
+    displayName: 'Print JWT Token Details'
+    inputs:
+      azureSubscription: '${service_connection_name}'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        echo "=== Azure DevOps JWT Token Debug ==="
+        
+        # Get the JWT token using Azure CLI (proper method)
+        JWT=$(az account get-access-token --query accessToken --output tsv)
+        
+        if [ -z "$JWT" ]; then
+          echo "ERROR: No JWT token found"
+          exit 1
+        fi
+        
+        echo "JWT Token found - Length: $${#JWT}"
+        echo ""
+        
+        # Split the JWT into parts (header.payload.signature)
+        IFS="." read -r -a jwt_parts <<< "$JWT"
+        
+        echo "JWT Parts Count: $${#jwt_parts[@]}"
+        echo "Header length: $${#jwt_parts[0]}"
+        echo "Payload length: $${#jwt_parts[1]}"
+        echo "Signature length: $${#jwt_parts[2]}"
+        echo ""
+        
+        # Install jq for JSON parsing
+        sudo apt-get update -qq && sudo apt-get install -y jq
+        
+        # Decode and print header
+        echo "=== JWT Header ==="
+        echo "$${jwt_parts[0]}" | base64 -d 2>/dev/null | jq . || echo "Could not decode header"
+        echo ""
+        
+        # Decode and print payload
+        echo "=== JWT Payload ==="
+        echo "$${jwt_parts[1]}" | base64 -d 2>/dev/null | jq . || echo "Could not decode payload"
+        echo ""
+        
+        # Print first few characters of each part for verification
+        echo "=== JWT Parts Preview ==="
+        echo "Header start: $${jwt_parts[0]:0:20}..."
+        echo "Payload start: $${jwt_parts[1]:0:20}..."
+        echo "Signature start: $${jwt_parts[2]:0:20}..."
+        
+        echo ""
+        echo "=== Debug Complete ==="

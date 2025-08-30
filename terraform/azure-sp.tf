@@ -40,7 +40,11 @@ resource "azuread_service_principal" "vault_sp" {
   owners                       = [data.azurerm_client_config.current.object_id]
 }
 
-# Note: No client secret needed - using Workload Identity Federation for passwordless authentication
+# Create client secret for Vault Azure auth backend (in addition to WIF)
+resource "azuread_application_password" "vault_sp_password" {
+  application_id = azuread_application.vault_sp_app.id
+  display_name   = "vault-auth-secret"
+}
 
 # Assign Owner role to Service Principal on the subscription
 resource "azurerm_role_assignment" "vault_sp_owner" {

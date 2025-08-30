@@ -1,0 +1,154 @@
+# Azure DevOps Pipeline with HashiCorp Vault Authentication
+# Based on HashiCorp official blog approach
+
+trigger:
+- main
+
+pool: Default
+
+variables:
+  VAULT_ADDR: 'https://your-vault-server.com:8200'
+  # VAULT_NAMESPACE: 'admin'  # Uncomment if using Vault Enterprise
+
+jobs:
+- job: VaultAuthentication
+  displayName: 'Authenticate with Vault and Retrieve Secrets'
+  steps:
+  
+  - task: AzureCLI@2
+    displayName: 'Establish Identity and Authenticate with Vault'
+    env:
+      VAULT_ADDR: $(VAULT_ADDR)
+      # VAULT_NAMESPACE: $(VAULT_NAMESPACE)  # Uncomment if using Vault Enterprise
+    inputs:
+      azureSubscription: '${service_connection_name}'
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        # Install jq if not available
+        if ! command -v jq &> /dev/null; then
+          sudo apt-get update -qq && sudo apt-get install -y jq
+        fi
+        
+        # Install vault CLI if not available
+        if ! command -v vault &> /dev/null; then
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+        fi
+        
+        echo "=== Authenticating with Vault ==="
+        
+        # Get JWT token using Azure CLI
+        JWT=$(az account get-access-token --query accessToken --output tsv)
+        
+        if [ -z "$JWT" ]; then
+          echo "##[error]Failed to obtain JWT token from Azure CLI"
+          exit 1
+        fi
+        
+        echo "JWT token obtained successfully"
+        
+        # Authenticate with Vault using JWT
+        VAULT_TOKEN=$(vault write -format=json auth/${vault_auth_path}/login role=${vault_role_name} jwt="$JWT" | jq -r .auth.client_token)
+        
+        if [ -z "$VAULT_TOKEN" ] || [ "$VAULT_TOKEN" = "null" ]; then
+          echo "##[error]Failed to authenticate with Vault"
+          exit 1
+        fi
+        
+        echo "##[section]Successfully authenticated with Vault!"
+        
+        # Set task variable for future use in other tasks
+        echo "##vso[task.setvariable variable=VAULT_TOKEN;isSecret=true]$VAULT_TOKEN"
+        
+        # Verify token by checking token info
+        vault token lookup > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+          echo "##[section]Token validation successful"
+          vault token lookup -format=json | jq -r '.data.policies[]' | while read policy; do
+            echo "Token policy: $policy"
+          done
+        else
+          echo "##[warning]Could not validate token, but authentication appeared successful"
+        fi
+
+  - task: Bash@3
+    displayName: 'Read Secret from Vault'
+    env:
+      VAULT_ADDR: $(VAULT_ADDR)
+      # VAULT_NAMESPACE: $(VAULT_NAMESPACE)  # Uncomment if using Vault Enterprise
+    inputs:
+      targetType: 'inline'
+      script: |
+        if [ -z "$VAULT_TOKEN" ]; then
+          echo "##[error]VAULT_TOKEN not available from previous step"
+          exit 1
+        fi
+        
+        echo "##[section]Reading secret from Vault..."
+        
+        # Export VAULT_TOKEN for vault CLI
+        export VAULT_TOKEN
+        
+        # Read demo secret from KV v2 engine
+        SECRET_PATH="secret/data/demo"
+        
+        if vault kv get -format=json "$SECRET_PATH" > /dev/null 2>&1; then
+          echo "##[section]Successfully retrieved secret from path: $SECRET_PATH"
+          
+          # Extract specific values (be careful with sensitive data in logs)
+          USERNAME=$(vault kv get -field=username secret/demo 2>/dev/null || echo "not found")
+          
+          if [ "$USERNAME" != "not found" ]; then
+            echo "##[section]Found username in secret"
+            # Set as pipeline variable for use in other steps (don't log the actual value)
+            echo "##vso[task.setvariable variable=DB_USERNAME;isSecret=true]$USERNAME"
+          fi
+          
+          # You can read other fields similarly:
+          # PASSWORD=$(vault kv get -field=password secret/demo)
+          # API_KEY=$(vault kv get -field=api_key secret/demo)
+          
+        else
+          echo "##[warning]Secret not found at path: $SECRET_PATH"
+          echo "##[section]This is expected if the demo secret hasn't been created yet"
+        fi
+
+  - task: Bash@3
+    displayName: 'Use Secret in Application'
+    condition: ne(variables['DB_USERNAME'], '')
+    inputs:
+      targetType: 'inline'
+      script: |
+        echo "##[section]Using secrets in application deployment..."
+        
+        # In a real scenario, you would use the secrets for:
+        # - Database connections
+        # - API authentication  
+        # - Service configuration
+        # - Certificate management
+        
+        if [ ! -z "$DB_USERNAME" ]; then
+          echo "##[section]Database username is available for application configuration"
+          # Example: Configure application with database credentials
+          # echo "DATABASE_URL=postgres://$DB_USERNAME:$DB_PASSWORD@db:5432/myapp" > .env
+        fi
+        
+        echo "##[section]Application deployment simulation complete"
+
+  - task: Bash@3
+    displayName: 'Revoke Vault Token'
+    condition: always()
+    env:
+      VAULT_ADDR: $(VAULT_ADDR)
+      # VAULT_NAMESPACE: $(VAULT_NAMESPACE)  # Uncomment if using Vault Enterprise  
+    inputs:
+      targetType: 'inline'
+      script: |
+        if [ ! -z "$VAULT_TOKEN" ]; then
+          echo "##[section]Revoking Vault token for security..."
+          export VAULT_TOKEN
+          vault token revoke -self > /dev/null 2>&1 || echo "Token may have already expired"
+          echo "##[section]Token cleanup completed"
+        fi

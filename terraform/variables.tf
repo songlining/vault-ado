@@ -46,16 +46,3 @@ variable "service_endpoint_name" {
   default     = "AzureRM Service Connection for Vault with Automatic WIF"
 }
 
-# Optional Vault Configuration (can use environment variables instead)
-variable "vault_address" {
-  description = "HashiCorp Vault server address"
-  type        = string
-  default     = ""
-}
-
-variable "vault_token" {
-  description = "HashiCorp Vault admin token"
-  type        = string
-  sensitive   = true
-  default     = ""
-}

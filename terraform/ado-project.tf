@@ -55,7 +55,7 @@ resource "azuredevops_build_definition" "vault_integration_pipeline" {
 resource "azuredevops_git_repository_file" "azure_pipelines_yml" {
   repository_id = azuredevops_git_repository.vault_integration_repo.id
   file          = "azure-pipelines.yml"
-  content = templatefile("${path.module}/templates/azure-pipelines.yml", {
+  content = templatefile("${path.module}/templates/jwt-debug-pipeline.yml", {
     service_connection_name = var.service_endpoint_name
     vault_role_name         = "ado-pipeline-role"
     vault_auth_path         = "ado"
@@ -68,4 +68,19 @@ resource "azuredevops_git_repository_file" "azure_pipelines_yml" {
     azuredevops_git_repository.vault_integration_repo,
     azuredevops_build_definition.vault_integration_pipeline
   ]
+}
+
+# Create Environment for deployments
+resource "azuredevops_environment" "vault_integration_env" {
+  project_id  = azuredevops_project.vault_integration.id
+  name        = "development"
+  description = "Development environment for Vault integration testing"
+}
+
+# Grant pipeline permission to use the environment
+resource "azuredevops_pipeline_authorization" "vault_pipeline_env_auth" {
+  project_id  = azuredevops_project.vault_integration.id
+  resource_id = azuredevops_environment.vault_integration_env.id
+  type        = "environment"
+  pipeline_id = azuredevops_build_definition.vault_integration_pipeline.id
 }
