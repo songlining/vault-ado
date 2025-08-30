@@ -59,9 +59,30 @@ resource "azuredevops_git_repository_file" "azure_pipelines_yml" {
     service_connection_name = var.service_endpoint_name
     vault_role_name         = "ado-pipeline-role"
     vault_auth_path         = "ado"
+    vault_addr              = var.vault_addr
   })
   branch              = azuredevops_git_repository.vault_integration_repo.default_branch
   commit_message      = "Add Azure DevOps pipeline with Vault integration"
+  overwrite_on_create = true
+  
+  depends_on = [
+    azuredevops_git_repository.vault_integration_repo,
+    azuredevops_build_definition.vault_integration_pipeline
+  ]
+}
+
+# Create simple-vault-pipeline.yml file in the repository
+resource "azuredevops_git_repository_file" "simple_vault_pipeline_yml" {
+  repository_id = azuredevops_git_repository.vault_integration_repo.id
+  file          = "simple-vault-pipeline.yml"
+  content = templatefile("${path.module}/templates/simple-vault-pipeline.yml", {
+    service_connection_name = var.service_endpoint_name
+    vault_role_name         = "ado-pipeline-role"
+    vault_auth_path         = "ado"
+    vault_addr              = var.vault_addr
+  })
+  branch              = azuredevops_git_repository.vault_integration_repo.default_branch
+  commit_message      = "Add simple Vault authentication pipeline"
   overwrite_on_create = true
   
   depends_on = [

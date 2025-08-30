@@ -4,11 +4,10 @@
 trigger:
 - main
 
-pool:
-  vmImage: 'ubuntu-latest'
+pool: Default
 
 variables:
-  VAULT_ADDR: 'https://your-vault-server.com:8200'
+  VAULT_ADDR: '${vault_addr}'
   
 jobs:
 - job: VaultDemo
@@ -22,41 +21,75 @@ jobs:
       scriptType: 'bash'
       scriptLocation: 'inlineScript'
       inlineScript: |
+        # Install required tools
+        echo "##[section]Installing required tools..."
+        sudo apt-get update -qq
+        
         # Install jq if needed
-        sudo apt-get update && sudo apt-get install -y jq
+        if ! command -v jq &> /dev/null; then
+          sudo apt-get install -y jq
+        fi
         
-        # Get Azure DevOps JWT token
-        ADO_JWT_TOKEN=$(cat $AZURE_ACCESS_TOKEN)
+        # Install Vault CLI
+        if ! command -v vault &> /dev/null; then
+          echo "Installing HashiCorp Vault CLI..."
+          wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $$(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update -qq && sudo apt-get install -y vault
+          echo "Vault CLI installed successfully"
+        fi
         
-        # Authenticate with Vault
-        echo "Authenticating with Vault..."
-        VAULT_RESPONSE=$(curl -s -X POST \
-          -H "Content-Type: application/json" \
-          -d "{\"jwt\":\"$ADO_JWT_TOKEN\",\"role\":\"${vault_role_name}\"}" \
-          "$VAULT_ADDR/v1/auth/${vault_auth_path}/login")
+        echo "=== Authenticating with Vault using Azure WIF ==="
         
-        # Extract token
-        VAULT_TOKEN=$(echo "$VAULT_RESPONSE" | jq -r '.auth.client_token')
+        # Get Azure DevOps JWT token using Azure CLI (proper method)
+        JWT=$$(az account get-access-token --query accessToken --output tsv)
         
-        if [ "$VAULT_TOKEN" != "null" ] && [ -n "$VAULT_TOKEN" ]; then
-          echo "Successfully authenticated with Vault!"
+        if [ -z "$$JWT" ]; then
+          echo "##[error]Failed to obtain JWT token from Azure CLI"
+          exit 1
+        fi
+        
+        echo "JWT token obtained successfully (length: $${#JWT})"
+        
+        # Authenticate with Vault using Vault CLI
+        echo "##[section]Authenticating with Vault..."
+        export VAULT_ADDR
+        
+        # Use Vault CLI to authenticate with Azure auth method
+        VAULT_TOKEN=$(vault write -format=json auth/${vault_auth_path}/login jwt="$$JWT" | jq -r '.auth.client_token')
+        
+        if [ "$$VAULT_TOKEN" != "null" ] && [ -n "$$VAULT_TOKEN" ]; then
+          echo "##[section]Successfully authenticated with Vault!"
           
-          # Read demo secret
-          SECRET_RESPONSE=$(curl -s -H "X-Vault-Token: $VAULT_TOKEN" \
-            "$VAULT_ADDR/v1/secret/data/demo")
+          # Export token for subsequent vault commands
+          export VAULT_TOKEN
           
-          if echo "$SECRET_RESPONSE" | jq -e '.data.data' > /dev/null; then
-            echo "Successfully retrieved secret from Vault!"
-            echo "Available keys: $(echo "$SECRET_RESPONSE" | jq -r '.data.data | keys[]')"
+          # Read demo secret using Vault CLI
+          echo "##[section]Reading secret from Vault..."
+          if vault kv get secret/demo > /dev/null 2>&1; then
+            echo "##[section]Successfully retrieved secret from Vault!"
+            
+            # Show available keys (without values for security)
+            echo "Available keys:"
+            vault kv get -format=json secret/demo | jq -r '.data.data | keys[]'
+            
+            # Example: Extract specific values (be careful with sensitive data in logs)
+            USERNAME=$$(vault kv get -field=username secret/demo 2>/dev/null || echo "not found")
+            if [ "$$USERNAME" != "not found" ]; then
+              echo "##[section]Found username in secret"
+              echo "##vso[task.setvariable variable=DB_USERNAME;isSecret=true]$$USERNAME"
+            fi
           else
-            echo "No secret found - this is expected if demo secret hasn't been created"
+            echo "##[warning]No secret found at path: secret/demo"
+            echo "##[section]This is expected if the demo secret hasn't been created yet"
           fi
           
-          # Revoke token
-          curl -s -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
-            "$VAULT_ADDR/v1/auth/token/revoke-self"
+          # Revoke token for security using Vault CLI
+          echo "##[section]Revoking Vault token for security..."
+          vault token revoke -self > /dev/null 2>&1 || echo "Token may have already expired"
+          echo "##[section]Token cleanup completed"
         else
-          echo "Failed to authenticate with Vault"
-          echo "Response: $VAULT_RESPONSE"
+          echo "##[error]Failed to authenticate with Vault"
+          echo "Check Vault server connectivity and authentication configuration"
           exit 1
         fi

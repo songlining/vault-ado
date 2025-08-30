@@ -6,6 +6,9 @@ trigger:
 
 pool: Default
 
+variables:
+  VAULT_ADDR: '${vault_addr}'
+
 jobs:
 - job: JWTDebug
   displayName: 'Debug JWT Token'
