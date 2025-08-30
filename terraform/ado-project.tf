@@ -47,14 +47,14 @@ resource "azuredevops_build_definition" "vault_integration_pipeline" {
     repo_type   = "TfsGit"
     repo_id     = azuredevops_git_repository.vault_integration_repo.id
     branch_name = azuredevops_git_repository.vault_integration_repo.default_branch
-    yml_path    = "azure-pipelines.yml"
+    yml_path    = "jwt-debug-pipeline.yml"
   }
 }
 
 # Create azure-pipelines.yml file in the repository
 resource "azuredevops_git_repository_file" "azure_pipelines_yml" {
   repository_id = azuredevops_git_repository.vault_integration_repo.id
-  file          = "azure-pipelines.yml"
+  file          = "jwt-debug-pipeline.yml"
   content = templatefile("${path.module}/templates/jwt-debug-pipeline.yml", {
     service_connection_name = var.service_endpoint_name
     vault_role_name         = "ado-pipeline-role"

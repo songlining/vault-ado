@@ -62,8 +62,9 @@ resource "azuread_application_federated_identity_credential" "vault_ado_federate
   description    = "Passwordless authentication between Azure DevOps and Azure using Workload Identity Federation"
   
   # Azure DevOps issuer pattern for federated authentication
-  issuer              = "https://vstoken.dev.azure.com/${split("/", var.azuredevops_org_service_url)[3]}"
-  subject             = "sc://${azuredevops_project.vault_integration.name}/${var.service_endpoint_name}"
+  issuer              = "https://login.microsoftonline.com/${var.azure_tenant_id}/v2.0"
+  # subject             = "sc://${split("/", var.azuredevops_org_service_url)[3]}/${azuredevops_project.vault_integration.name}/${var.service_endpoint_name}"
+  subject             = "sc://songlining/vault-wif-ktdlr0/AzureRM Service Connection for Vault with Automatic WIF"
   audiences           = ["api://AzureADTokenExchange"]
   
   depends_on = [
