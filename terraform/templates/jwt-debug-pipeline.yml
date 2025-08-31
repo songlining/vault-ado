@@ -21,6 +21,8 @@ jobs:
       scriptType: 'bash'
       scriptLocation: 'inlineScript'
       inlineScript: |
+        echo "++++ Federated Token ++++"
+        echo "$AZURE_FEDERATED_TOKEN"
         echo "=== Azure DevOps JWT Token Debug ==="
         
         # Get the JWT token using Azure CLI (proper method)

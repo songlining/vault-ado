@@ -20,20 +20,18 @@ resource "vault_kv_secret_v2" "demo_secret" {
   })
 }
 
-# Enable Azure auth method for Azure DevOps
+# Enable JWT auth method for Azure DevOps (more compatible with Azure DevOps WIF)
 resource "vault_auth_backend" "ado" {
-  type = "azure"
+  type = "jwt"
   path = "ado"
-  description = "Azure auth backend for Azure DevOps integration"
+  description = "JWT auth backend for Azure DevOps integration"
 }
 
-# Configure Azure auth method
-resource "vault_azure_auth_backend_config" "ado" {
-  backend       = vault_auth_backend.ado.path
-  tenant_id     = var.azure_tenant_id
-  resource      = "https://management.core.windows.net/"
-  client_id     = azuread_application.vault_sp_app.client_id
-  client_secret = azuread_application_password.vault_sp_password.value
+# Configure JWT auth method for Azure AD tokens
+resource "vault_jwt_auth_backend" "ado" {
+  path            = vault_auth_backend.ado.path
+  oidc_discovery_url = "https://login.microsoftonline.com/${var.azure_tenant_id}/v2.0"
+  bound_issuer    = "https://sts.windows.net/${var.azure_tenant_id}/"
 }
 
 # Create policy for ADO pipeline
@@ -54,15 +52,21 @@ EOT
 }
 
 # Create role for Azure DevOps pipeline authentication
-resource "vault_azure_auth_backend_role" "ado_pipeline_role" {
+resource "vault_jwt_auth_backend_role" "ado_pipeline_role" {
   backend         = vault_auth_backend.ado.path
-  role            = "ado-pipeline-role"
+  role_name       = "ado-pipeline-role"
   token_policies  = [vault_policy.ado_pipeline_policy.name]
   
-  # Allow authentication from Azure resources
-  bound_subscription_ids = [var.azure_subscription_id]
-  bound_resource_groups  = ["*"]  # Allow any resource group
+  # Bind to specific Azure AD application (service principal)
+  bound_audiences = ["https://management.core.windows.net/"]
+  bound_subject   = azuread_service_principal.vault_sp.object_id
+  bound_claims = {
+    iss = "https://sts.windows.net/${var.azure_tenant_id}/"
+    tid = var.azure_tenant_id
+  }
   
-  token_ttl     = 3600
-  token_max_ttl = 7200
+  user_claim      = "oid"
+  role_type       = "jwt"
+  token_ttl       = 3600
+  token_max_ttl   = 7200
 }

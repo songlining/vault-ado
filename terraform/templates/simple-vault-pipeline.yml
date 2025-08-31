@@ -8,6 +8,7 @@ pool: Default
 
 variables:
   VAULT_ADDR: '${vault_addr}'
+  VAULT_SKIP_VERIFY: '1'
   
 jobs:
 - job: VaultDemo
@@ -26,70 +27,153 @@ jobs:
         sudo apt-get update -qq
         
         # Install jq if needed
-        if ! command -v jq &> /dev/null; then
+        command -v jq > /dev/null 2>&1
+        JQ_EXIT_CODE=$?
+        if [ $JQ_EXIT_CODE -ne 0 ]; then
           sudo apt-get install -y jq
-        fi
-        
-        # Install Vault CLI
-        if ! command -v vault &> /dev/null; then
-          echo "Installing HashiCorp Vault CLI..."
-          wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $$(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-          sudo apt-get update -qq && sudo apt-get install -y vault
-          echo "Vault CLI installed successfully"
         fi
         
         echo "=== Authenticating with Vault using Azure WIF ==="
         
         # Get Azure DevOps JWT token using Azure CLI (proper method)
-        JWT=$$(az account get-access-token --query accessToken --output tsv)
+        echo "##[section]Getting fresh JWT token from Azure CLI..."
+        # Use the correct audience that Vault expects
+        az account get-access-token --resource https://management.core.windows.net/ --query accessToken --output tsv > /tmp/jwt_token.txt
+        JWT=$(cat /tmp/jwt_token.txt)
         
-        if [ -z "$$JWT" ]; then
-          echo "##[error]Failed to obtain JWT token from Azure CLI"
-          exit 1
+        if [ -z "$JWT" ]; then
+          echo "##[section]Failed with management.core.windows.net scope, trying management.azure.com..."
+          # Try getting token with the other management endpoint
+          az account get-access-token --resource https://management.azure.com/ --query accessToken --output tsv > /tmp/jwt_token_alt.txt
+          JWT=$(cat /tmp/jwt_token_alt.txt)
+          
+          if [ -z "$JWT" ]; then
+            echo "##[error]Failed to obtain JWT token from Azure CLI"
+            echo "##[section]Attempting fresh Azure login..."
+            
+            # Try to refresh Azure login if JWT failed
+            az account clear
+            az login --service-principal -u "$servicePrincipalId" --tenant "$tenantId" --federated-token "$AZURE_FEDERATED_TOKEN"
+            
+            # Try getting JWT again after fresh login
+            az account get-access-token --query accessToken --output tsv > /tmp/jwt_token_retry.txt
+            JWT=$(cat /tmp/jwt_token_retry.txt)
+            
+            if [ -z "$JWT" ]; then
+              echo "##[error]Still failed to obtain JWT token after fresh login"
+              exit 1
+            fi
+          fi
         fi
         
-        echo "JWT token obtained successfully (length: $${#JWT})"
+        echo "JWT token obtained successfully:"
+        echo "$JWT"
         
         # Authenticate with Vault using Vault CLI
         echo "##[section]Authenticating with Vault..."
         export VAULT_ADDR
+        export VAULT_SKIP_VERIFY
         
         # Use Vault CLI to authenticate with Azure auth method
-        VAULT_TOKEN=$(vault write -format=json auth/${vault_auth_path}/login jwt="$$JWT" | jq -r '.auth.client_token')
+        echo "##[section]Attempting Vault authentication with fresh JWT..."
+        # Get current subscription and resource group info
+        SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+        echo "##[section]Using subscription: $SUBSCRIPTION_ID"
         
-        if [ "$$VAULT_TOKEN" != "null" ] && [ -n "$$VAULT_TOKEN" ]; then
-          echo "##[section]Successfully authenticated with Vault!"
-          
-          # Export token for subsequent vault commands
-          export VAULT_TOKEN
-          
-          # Read demo secret using Vault CLI
-          echo "##[section]Reading secret from Vault..."
-          if vault kv get secret/demo > /dev/null 2>&1; then
-            echo "##[section]Successfully retrieved secret from Vault!"
-            
-            # Show available keys (without values for security)
-            echo "Available keys:"
-            vault kv get -format=json secret/demo | jq -r '.data.data | keys[]'
-            
-            # Example: Extract specific values (be careful with sensitive data in logs)
-            USERNAME=$$(vault kv get -field=username secret/demo 2>/dev/null || echo "not found")
-            if [ "$$USERNAME" != "not found" ]; then
-              echo "##[section]Found username in secret"
-              echo "##vso[task.setvariable variable=DB_USERNAME;isSecret=true]$$USERNAME"
-            fi
+        # Debug: Decode JWT token to see what resource_id it contains
+        echo "##[section]Decoding JWT token to find resource_id..."
+        IFS="." read -r -a jwt_parts <<< "$JWT"
+        echo "JWT payload (base64 decoded):"
+        echo "$${jwt_parts[1]}" | base64 -d 2>/dev/null | jq . || echo "Could not decode JWT payload"
+        
+        # List all resource groups to see what's available
+        echo "##[section]Available resource groups in subscription:"
+        az group list --query '[].name' --output table
+        
+        # Get actual resource groups from the subscription
+        mapfile -t RESOURCE_GROUPS < <(az group list --query '[].name' --output tsv)
+        echo "##[section]Found $${#RESOURCE_GROUPS[@]} resource groups to test"
+        
+        # Try JWT authentication (simpler, no resource group constraints)
+        echo "##[section]Trying JWT authentication..."
+        vault write -format=json auth/${vault_auth_path}/login role="${vault_role_name}" jwt="$JWT" > /tmp/vault_response.json 2>&1
+        VAULT_EXIT_CODE=$?
+        VAULT_RESPONSE=$(cat /tmp/vault_response.json)
+        echo "JWT auth response: $VAULT_RESPONSE"
+        VAULT_EXIT_CODE=$?
+        VAULT_RESPONSE=$(cat /tmp/vault_response.json)
+        
+        if [ $VAULT_EXIT_CODE -eq 0 ]; then
+          echo "$VAULT_RESPONSE" | jq -r '.auth.client_token' 2>/dev/null > /tmp/vault_token.txt
+          JQ_EXIT_CODE=$?
+          if [ $JQ_EXIT_CODE -eq 0 ]; then
+            VAULT_TOKEN=$(cat /tmp/vault_token.txt)
           else
-            echo "##[warning]No secret found at path: secret/demo"
-            echo "##[section]This is expected if the demo secret hasn't been created yet"
+            VAULT_TOKEN="null"
           fi
-          
-          # Revoke token for security using Vault CLI
-          echo "##[section]Revoking Vault token for security..."
-          vault token revoke -self > /dev/null 2>&1 || echo "Token may have already expired"
-          echo "##[section]Token cleanup completed"
+        else
+          VAULT_TOKEN="null"
+        fi
+        
+        if [ "$VAULT_TOKEN" != "null" ]; then
+          if [ -n "$VAULT_TOKEN" ]; then
+            echo "##[section]Successfully authenticated with Vault!"
+            echo "$VAULT_TOKEN"
+            # Export token for subsequent vault commands
+            export VAULT_TOKEN
+            
+            # Read demo secret using Vault CLI
+            echo "##[section]Reading secret from Vault..."
+            echo "##[section]Debug: Attempting to read secret/demo..."
+            vault kv get secret/demo > /tmp/vault_read_output.txt 2>&1
+            VAULT_READ_EXIT_CODE=$?
+            VAULT_READ_OUTPUT=$(cat /tmp/vault_read_output.txt)
+            
+            if [ $VAULT_READ_EXIT_CODE -eq 0 ]; then
+              echo "##[section]Successfully retrieved secret from Vault!"
+              echo "$VAULT_READ_OUTPUT"
+              
+              # Show available keys (without values for security)
+              echo "Available keys:"
+              vault kv get -format=json secret/demo | jq -r '.data.data | keys[]'
+              
+              # Example: Extract specific values (be careful with sensitive data in logs)
+              vault kv get -field=username secret/demo > /tmp/username.txt 2>/dev/null
+              USERNAME_EXIT_CODE=$?
+              if [ $USERNAME_EXIT_CODE -ne 0 ]; then
+                echo "not found" > /tmp/username.txt
+              fi
+              USERNAME=$(cat /tmp/username.txt)
+              if [ "$USERNAME" != "not found" ]; then
+                echo "##[section]Found username in secret"
+                echo "##vso[task.setvariable variable=DB_USERNAME;isSecret=true]$USERNAME"
+              fi
+            else
+              echo "##[error]Failed to read secret from Vault!"
+              echo "##[section]Exit code: $VAULT_READ_EXIT_CODE"
+              echo "##[section]Output/Error:"
+              echo "$VAULT_READ_OUTPUT"
+              echo "##[section]Debug info:"
+              echo "VAULT_ADDR: $VAULT_ADDR"
+              echo "VAULT_TOKEN length: $${#VAULT_TOKEN}"
+              vault --version
+            fi
+            
+            # Revoke token for security using Vault CLI
+            echo "##[section]Revoking Vault token for security..."
+            vault token revoke -self > /dev/null 2>&1
+            REVOKE_EXIT_CODE=$?
+            if [ $REVOKE_EXIT_CODE -ne 0 ]; then
+              echo "Token may have already expired"
+            fi
+            echo "##[section]Token cleanup completed"
+          fi
         else
           echo "##[error]Failed to authenticate with Vault"
-          echo "Check Vault server connectivity and authentication configuration"
+          echo "##[section]Vault authentication response details:"
+          echo "$VAULT_RESPONSE"
+          echo "##[section]Check Vault server connectivity and authentication configuration"
+          echo "##[section]JWT token length: $${#JWT}"
+          echo "##[section]Vault address: $VAULT_ADDR"
           exit 1
         fi
