@@ -20,18 +20,24 @@ resource "vault_kv_secret_v2" "demo_secret" {
   })
 }
 
-# Enable JWT auth method for Azure DevOps (more compatible with Azure DevOps WIF)
+# Enable Azure auth method for Azure DevOps with proper configuration
 resource "vault_auth_backend" "ado" {
-  type = "jwt"
+  type = "azure"
   path = "ado"
-  description = "JWT auth backend for Azure DevOps integration"
+  description = "Azure auth backend for Azure DevOps integration with subscription binding"
 }
 
-# Configure JWT auth method for Azure AD tokens
-resource "vault_jwt_auth_backend" "ado" {
-  path            = vault_auth_backend.ado.path
-  oidc_discovery_url = "https://login.microsoftonline.com/${var.azure_tenant_id}/v2.0"
-  bound_issuer    = "https://sts.windows.net/${var.azure_tenant_id}/"
+# Configure Azure auth method for service principal authentication
+# This service principal needs read access to Azure Resource Manager
+resource "vault_azure_auth_backend_config" "ado" {
+  backend       = vault_auth_backend.ado.path
+  tenant_id     = var.azure_tenant_id
+  resource      = "https://management.core.windows.net/"
+  client_id     = azuread_application.vault_sp_app.client_id
+  client_secret = azuread_application_password.vault_sp_password.value
+  
+  # Environment should be AzurePublicCloud for standard Azure (default)
+  environment = "AzurePublicCloud"
 }
 
 # Create policy for ADO pipeline
@@ -51,22 +57,19 @@ path "secret/metadata/*" {
 EOT
 }
 
-# Create role for Azure DevOps pipeline authentication
-resource "vault_jwt_auth_backend_role" "ado_pipeline_role" {
+# Create role for Azure DevOps pipeline authentication with proper service principal binding
+resource "vault_azure_auth_backend_role" "ado_pipeline_role" {
   backend         = vault_auth_backend.ado.path
-  role_name       = "ado-pipeline-role"
+  role            = "ado-pipeline-role"
   token_policies  = [vault_policy.ado_pipeline_policy.name]
+
+  # Bind to specific service principal object ID (matches JWT oid field)
+  bound_service_principal_ids = [azuread_service_principal.vault_sp.object_id]
   
-  # Bind to specific Azure AD application (service principal)
-  bound_audiences = ["https://management.core.windows.net/"]
-  bound_subject   = azuread_service_principal.vault_sp.object_id
-  bound_claims = {
-    iss = "https://sts.windows.net/${var.azure_tenant_id}/"
-    tid = var.azure_tenant_id
-  }
+  # No subscription binding needed for Azure DevOps pipelines (per HashiCorp blog)
+  bound_subscription_ids = []
   
-  user_claim      = "oid"
-  role_type       = "jwt"
-  token_ttl       = 3600
-  token_max_ttl   = 7200
+  token_ttl     = 3600
+  token_max_ttl = 7200
+  token_type    = "batch"
 }

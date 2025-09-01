@@ -75,31 +75,20 @@ jobs:
         export VAULT_SKIP_VERIFY
         
         # Use Vault CLI to authenticate with Azure auth method
-        echo "##[section]Attempting Vault authentication with fresh JWT..."
-        # Get current subscription and resource group info
-        SUBSCRIPTION_ID=$(az account show --query id --output tsv)
-        echo "##[section]Using subscription: $SUBSCRIPTION_ID"
+        echo "##[section]Attempting Vault authentication with JWT..."
         
-        # Debug: Decode JWT token to see what resource_id it contains
-        echo "##[section]Decoding JWT token to find resource_id..."
+        # Debug: Decode JWT token to see its contents
+        echo "##[section]Decoding JWT token..."
         IFS="." read -r -a jwt_parts <<< "$JWT"
         echo "JWT payload (base64 decoded):"
         echo "$${jwt_parts[1]}" | base64 -d 2>/dev/null | jq . || echo "Could not decode JWT payload"
         
-        # List all resource groups to see what's available
-        echo "##[section]Available resource groups in subscription:"
-        az group list --query '[].name' --output table
-        
-        # Get actual resource groups from the subscription
-        mapfile -t RESOURCE_GROUPS < <(az group list --query '[].name' --output tsv)
-        echo "##[section]Found $${#RESOURCE_GROUPS[@]} resource groups to test"
-        
-        # Try JWT authentication (simpler, no resource group constraints)
-        echo "##[section]Trying JWT authentication..."
+        # Azure DevOps pipeline authentication (no subscription/resource group needed)
+        echo "##[section]Authenticating with Vault using Azure DevOps pipeline JWT..."
         vault write -format=json auth/${vault_auth_path}/login role="${vault_role_name}" jwt="$JWT" > /tmp/vault_response.json 2>&1
         VAULT_EXIT_CODE=$?
         VAULT_RESPONSE=$(cat /tmp/vault_response.json)
-        echo "JWT auth response: $VAULT_RESPONSE"
+        echo "Azure auth response: $VAULT_RESPONSE"
         VAULT_EXIT_CODE=$?
         VAULT_RESPONSE=$(cat /tmp/vault_response.json)
         

@@ -43,7 +43,7 @@ variable "project_visibility" {
 variable "service_endpoint_name" {
   description = "Name for the Azure DevOps service connection"
   type        = string
-  default     = "AzureRM Service Connection for Vault with Automatic WIF"
+  default     = "AzureRM Service Connection for Vault with Automatic WIF v2"
 }
 
 # Vault Configuration
