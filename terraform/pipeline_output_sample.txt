@@ -1,0 +1,148 @@
+##[section]Starting: Get Secret from Vault
+==============================================================================
+Task         : Azure CLI
+Description  : Run Azure CLI commands against an Azure subscription in a PowerShell Core/Shell script when running on Linux agent or PowerShell/PowerShell Core/Batch script when running on Windows agent.
+Version      : 2.259.1
+Author       : Microsoft Corporation
+Help         : https://docs.microsoft.com/azure/devops/pipelines/tasks/deploy/azure-cli
+==============================================================================
+[command]/usr/bin/az --version
+azure-cli                         2.76.0
+
+core                              2.76.0
+telemetry                          1.1.0
+
+Dependencies:
+msal                            1.33.0b1
+azure-mgmt-resource               23.3.0
+
+Python location '/opt/az/bin/python3'
+Config directory '/home/lsong/.azure'
+Extensions directory '/home/lsong/.azure/cliextensions'
+
+Python (Linux) 3.12.10 (main, Jul 29 2025, 09:29:05) [GCC 13.3.0]
+
+Legal docs and information: aka.ms/AzureCliLegal
+
+
+Your CLI is up-to-date.
+Setting AZURE_CONFIG_DIR env variable to: /home/lsong/ado-agent/_work/_temp/.azclitask
+Setting active cloud to: AzureCloud
+[command]/usr/bin/az cloud set -n AzureCloud
+[command]/usr/bin/az login --service-principal -u *** --tenant ***-***-***-***-*** --allow-no-subscriptions --federated-token ***
+[
+  {
+    "cloudName": "AzureCloud",
+    "homeTenantId": "***-***-***-***-***",
+    "id": "***-***-***-***-***",
+    "isDefault": true,
+    "managedByTenants": [],
+    "name": "***",
+    "state": "Enabled",
+    "tenantId": "***-***-***-***-***",
+    "user": {
+      "name": "***",
+      "type": "servicePrincipal"
+    }
+  }
+]
+[command]/usr/bin/az account set --subscription ***-***-***-***-***
+[command]/usr/bin/bash /home/lsong/ado-agent/_work/_temp/azureclitaskscript1756720259374.sh
+##[section]Installing required tools...
+=== Authenticating with Vault using Azure WIF ===
+##[section]Getting fresh JWT token from Azure CLI...
+JWT token obtained successfully:
+***
+##[section]Authenticating with Vault...
+##[section]Attempting Vault authentication with JWT...
+##[section]Decoding JWT token...
+JWT payload (base64 decoded):
+{
+  "aud": "https://management.core.windows.net/",
+  "iss": "https://sts.windows.net/***-***-***-***-***/",
+  "iat": 1756719963,
+  "nbf": 1756719963,
+  "exp": 1756723863,
+  "aio": "AWQAm/8ZAAAADrBbYXnlicbN27V4rOXxrJpnKlIT964K9U38+o7PfYi7N5hwur0Pr5WfelVKEz1EcK814SNxbPijhZRwY5cuecpjJZsxPV9qjS4zPk4J9RZ16vmtQA4c01MA0YIrBCFq",
+  "appid": "***",
+  "appidacr": "2",
+  "idp": "https://sts.windows.net/***-***-***-***-***/",
+  "idtyp": "app",
+  "oid": "***-***-***-***-***",
+  "rh": "1.AUIAm8uthWT1wUup1J0EWsOKxEZIf3kAutdPukPawfj2MBNCAABCAA.",
+  "sub": "***-***-***-***-***",
+  "tid": "***-***-***-***-***",
+  "uti": "kIOx_hloEka63r_cWyIdAQ",
+  "ver": "1.0",
+  "xms_ftd": "-lBCB0S2h-oxJy-vedWQt38Ld_COZ2seZuDAo2a2PvMBYXVzdHJhbGlhc291dGhlYXN0LWRzbXM",
+  "xms_idrel": "7 24",
+  "xms_rd": "0.42LlYBJidBIS4WAXEmjWf2SjuafUbXnpTKWDB499BYpyCgmwF6gLmN166bbLuTzG9K5yCFCUQ0jAzaO-kmHXdf9dzrcO_vhmICzFx8ElxGVobmpmbmhpaWYkxc7BIsTsHGAIAA",
+  "xms_tcdt": 1644805033
+}
+##[section]Authenticating with Vault using Azure DevOps pipeline JWT...
+Azure auth response: {
+  "request_id": "8aefde0c-1648-7c2e-f61c-a40c9cd8beeb",
+  "lease_id": "",
+  "lease_duration": 0,
+  "renewable": false,
+  "data": null,
+  "warnings": null,
+  "auth": {
+    "client_token": "***",
+    "accessor": "",
+    "policies": [
+      "ado-pipeline-policy",
+      "default"
+    ],
+    "token_policies": [
+      "ado-pipeline-policy",
+      "default"
+    ],
+    "identity_policies": null,
+    "metadata": {
+      "app_id": "***",
+      "resource_group_name": "",
+      "role": "ado-pipeline-role",
+      "subscription_id": ""
+    },
+    "orphan": true,
+    "entity_id": "***-***-***-***-***",
+    "lease_duration": 3600,
+    "renewable": false,
+    "mfa_requirement": null
+  }
+}
+##[section]Successfully authenticated with Vault!
+***
+##[section]Reading secret from Vault...
+##[section]Debug: Attempting to read secret/demo...
+##[section]Successfully retrieved secret from Vault!
+== Secret Path ==
+secret/data/demo
+
+======= Metadata =======
+Key                Value
+---                -----
+created_time       2025-09-01T09:47:44.42224803Z
+custom_metadata    <nil>
+deletion_time      n/a
+destroyed          false
+version            1
+
+====== Data ======
+Key         Value
+---         -----
+api_key     demo-api-key-12345
+password    demo-password
+username    demo-user
+Available keys:
+api_key
+password
+username
+##[section]Found username in secret
+##[section]Revoking Vault token for security...
+Token may have already expired
+##[section]Token cleanup completed
+
+[command]/usr/bin/az account clear
+##[section]Finishing: Get Secret from Vault
