@@ -6,6 +6,16 @@ trigger:
 
 pool: Default
 
+parameters:
+- name: env
+  displayName: Environment
+  type: string
+  default: 'dev'
+- name: size
+  displayName: Size
+  type: string
+  default: 'small'
+
 variables:
   VAULT_ADDR: '${vault_addr}'
   VAULT_SKIP_VERIFY: '1'
@@ -14,6 +24,13 @@ jobs:
 - job: VaultDemo
   displayName: 'Simple Vault Integration Demo'
   steps:
+  
+  - script: |
+      echo "##[section]Pipeline Parameters:"
+      echo "Environment: $${{ parameters.env }}"
+      echo "Size: $${{ parameters.size }}"
+      echo "##[section]=============================="
+    displayName: 'Display Pipeline Parameters'
   
   - task: AzureCLI@2
     displayName: 'Get Secret from Vault'
