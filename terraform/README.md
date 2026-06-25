@@ -57,6 +57,34 @@ sequenceDiagram
   Secret-->>Pipeline: Return secret data
 ```
 
+### Mapping the Flow to Pipeline Code
+
+Some of the authentication steps are handled by Azure DevOps and Azure CLI rather than appearing as separate Bash commands in the script.
+
+- **Step 1** starts at the `AzureCLI@2` task. The `azureSubscription` input points the task at the Azure DevOps service connection created by Terraform.
+- **Step 2** is implicit. Because the service connection uses `WorkloadIdentityFederation`, Azure DevOps requests the short-lived federated token for that service connection behind the scenes.
+- **Step 3** is completed when Azure CLI is authenticated as the configured service principal and the script asks for an Azure access token:
+
+```bash
+JWT=$(az account get-access-token --resource https://management.core.windows.net/ --query accessToken --output tsv)
+```
+
+The variable is named `JWT` because the Azure access token is JWT-formatted. In this default flow, it contains the Azure access token returned by Azure CLI, not the raw Azure DevOps federated token.
+
+- **Steps 4 and 5** happen when the script sends that Azure access token to Vault:
+
+```bash
+vault write -format=json auth/ado/login role="ado-pipeline-role" jwt="$JWT"
+```
+
+Vault validates the token, checks that it belongs to the configured service principal object ID, and returns a Vault token.
+
+- **Step 6** is the secret read after the Vault token has been exported:
+
+```bash
+vault kv get secret/demo
+```
+
 ## Security Notes
 
 - **No Azure DevOps service principal secret** - The service connection uses Workload Identity Federation instead of storing a client secret in Azure DevOps.
