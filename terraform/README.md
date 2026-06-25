@@ -176,14 +176,14 @@ resource "vault_azure_auth_backend_role" "ado_pipeline_role" {
 }
 ```
 
-**Important**: The `bound_service_principal_ids` must use the service principal's **object ID**, not client ID, as it matches the `oid` field in the JWT token.
+**Important**: The `bound_service_principal_ids` must use the service principal's **object ID**, not client ID, as it matches the `oid` claim in the Azure access token.
 
 ### Pipeline Authentication
 
 The pipeline uses Vault CLI for authentication:
 
 ```bash
-# Get JWT token from Azure CLI
+# Get Azure access token from Azure CLI. The token is JWT-formatted.
 JWT=$(az account get-access-token --resource https://management.core.windows.net/ --query accessToken --output tsv)
 
 # Authenticate with Vault (no subscription_id needed)
@@ -261,13 +261,13 @@ The repository includes four pipeline templates, but Terraform only deploys one 
 
 ### 1. `simple-vault-pipeline.yml` (Primary)
 - Complete Vault authentication workflow
-- JWT token acquisition and validation
+- Azure access token acquisition for Vault authentication
 - Secret retrieval with error handling
 - Token cleanup and security best practices
 - Used by the created build pipeline
 
 ### 2. `jwt-debug-pipeline.yml` (Unused debug template)
-- Decodes and displays JWT token contents
+- Decodes and displays JWT-formatted token contents
 - Useful for troubleshooting authentication issues
 - Shows token metadata and structure
 - Not uploaded to the generated Azure DevOps repository by Terraform
@@ -310,7 +310,7 @@ jobs:
       scriptType: 'bash'
       scriptLocation: 'inlineScript'
       inlineScript: |
-        # Get JWT token
+        # Get Azure access token. The token is JWT-formatted.
         JWT=$(az account get-access-token --resource https://management.core.windows.net/ --query accessToken --output tsv)
         
         # Authenticate with Vault
@@ -447,16 +447,16 @@ resource "vault_azure_auth_backend_role" "ado_pipeline_role_prod" {
 
 ```
 terraform/
-|-- README.md                    # This file
-|-- main.tf                      # Provider configurations
-|-- variables.tf                 # Input variables
-|-- outputs.tf                   # Output values
-|-- azure-sp.tf                  # Microsoft Entra resources
-|-- ado-project.tf               # Azure DevOps resources
-|-- vault-config.tf              # Vault configuration
-`-- templates/
-  |-- simple-vault-pipeline.yml    # Primary working template
-  |-- jwt-debug-pipeline.yml       # JWT debugging
-  |-- azure-pipelines.yml          # Advanced template
-  `-- vault-auth-pipeline.yml      # Auth-focused template
+├── README.md                    # This file
+├── main.tf                      # Provider configurations
+├── variables.tf                 # Input variables
+├── outputs.tf                   # Output values
+├── azure-sp.tf                  # Microsoft Entra resources
+├── ado-project.tf               # Azure DevOps resources
+├── vault-config.tf              # Vault configuration
+└── templates/
+    ├── simple-vault-pipeline.yml    # Primary working template
+    ├── jwt-debug-pipeline.yml       # JWT debugging
+    ├── azure-pipelines.yml          # Advanced template
+    └── vault-auth-pipeline.yml      # Auth-focused template
 ```
