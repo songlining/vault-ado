@@ -1,29 +1,71 @@
-# Azure DevOps + HashiCorp Vault Integration (Passwordless)
+# Azure DevOps + HashiCorp Vault Integration with Workload Identity Federation
 
-This Terraform configuration creates a complete passwordless integration between Azure DevOps pipelines and HashiCorp Vault using Workload Identity Federation and Azure auth backend.
+This Terraform configuration creates an Azure DevOps pipeline integration with HashiCorp Vault using Azure DevOps Workload Identity Federation and the Vault Azure auth backend.
 
-## 🏗️ Architecture Overview
+## Architecture Overview
+
+Terraform builds three connected parts of the integration:
+
+- **Azure DevOps control plane** - A project, Git repository, build definition, `simple-vault-pipeline.yml`, service connection, environment, and pipeline permissions.
+- **Azure identity plane** - A Microsoft Entra application, service principal, subscription role assignment, and federated identity credential that trusts the Azure DevOps service connection.
+- **Vault control plane** - A KV v2 mount, demo secret, Azure auth backend, Azure auth configuration, policy, and role bound to the service principal object ID.
 
 ```
-Azure DevOps Pipeline → Azure AD (WIF) → JWT Token → Vault (Azure Auth) → Secrets
+                         Terraform apply
+                                │
+             ┌──────────────────┼──────────────────┐
+             │                  │                  │
+             ▼                  ▼                  ▼
+    Azure DevOps project  Microsoft Entra ID  HashiCorp Vault
+    repo + pipeline       app + service       auth/ado + policy
+    service connection    principal + WIF     secret/demo
+             │                  │                  │
+             └──────────────────┼──────────────────┘
+                                │
+                                ▼
+            Pipeline gets Azure token, logs into Vault,
+            receives a Vault token, then reads secret/demo.
 ```
 
-**Authentication Flow:**
-1. Azure DevOps pipeline runs with service connection (WIF)
-2. Azure CLI generates JWT token with service principal's object ID
-3. JWT token sent to Vault's Azure auth backend
-4. Vault validates JWT and returns Vault token
-5. Pipeline uses Vault token to access secrets
+**Runtime Authentication Flow:**
+1. Azure DevOps runs the `AzureCLI@2` task with the configured Workload Identity Federation service connection.
+2. Azure DevOps requests a short-lived federated token for the service connection.
+3. Microsoft Entra ID exchanges that federated token for an Azure access token for the configured service principal.
+4. The pipeline passes the Azure access token to Vault's Azure auth backend.
+5. Vault validates the token, checks that it belongs to the bound service principal object ID, and returns a short-lived Vault token.
+6. The pipeline uses the Vault token to read the demo secret.
 
-## 🔐 Security Features
+```mermaid
+sequenceDiagram
+  participant Pipeline as Azure DevOps Pipeline
+  participant ADO as Azure DevOps Service Connection
+  participant OIDC as Azure DevOps OIDC Issuer
+  participant Entra as Microsoft Entra ID
+  participant Vault as HashiCorp Vault
+  participant Secret as secret/demo
 
-- ✅ **Passwordless Authentication** - No secrets stored anywhere
-- ✅ **Workload Identity Federation** - Uses Azure AD federated credentials  
-- ✅ **Service Principal Binding** - Vault role bound to specific object ID
-- ✅ **No Subscription Constraints** - Follows HashiCorp guidance for pipelines
-- ✅ **Complete Azure DevOps Project Setup** - Project, repository, pipeline, and service connection
+  Pipeline->>ADO: 1. Start AzureCLI@2 with WIF service connection
+  ADO->>OIDC: 2. Request token for service connection subject
+  OIDC-->>ADO: Short-lived federated token
+  ADO->>Entra: 3. Exchange federated token for access token
+  Note over Entra: Match issuer, subject, and audience on app credential
+  Entra-->>Pipeline: Azure access token for service principal
+  Pipeline->>Vault: 4. Login to auth/ado with Azure access token
+  Note over Vault: 5. Validate token and bound service principal object ID
+  Vault-->>Pipeline: Short-lived Vault token
+  Pipeline->>Secret: 6. Read demo secret with Vault token
+  Secret-->>Pipeline: Return secret data
+```
 
-## 🚀 Quick Start
+## Security Notes
+
+- **No Azure DevOps service principal secret** - The service connection uses Workload Identity Federation instead of storing a client secret in Azure DevOps.
+- **Federated credential on the Entra application** - Terraform creates the trust between the Azure DevOps service connection subject and the Entra application.
+- **Service principal binding in Vault** - The Vault role is bound to the service principal object ID, matching the `oid` claim in the Azure token.
+- **No subscription binding in Vault** - The Vault role intentionally leaves `bound_subscription_ids` empty for the Azure DevOps pipeline flow.
+- **Protect Terraform state** - Terraform creates an Azure application password for Vault's Azure auth backend and demo Vault secret data. Treat local and remote state as sensitive.
+
+## Quick Start
 
 ### 1. Prerequisites
 
@@ -31,7 +73,7 @@ Azure DevOps Pipeline → Azure AD (WIF) → JWT Token → Vault (Azure Auth) �
 - Terraform installed
 - HashiCorp Vault server running and accessible
 - Azure DevOps organization with admin access
-- Agent VM to run agent pool
+- Agent pool with an agent that can reach Vault and has the required tools available. The pipeline expects Azure CLI and Vault CLI; the template installs `jq` if it is missing.
 
 ### 2. Set Environment Variables (Recommended)
 
@@ -40,7 +82,7 @@ Azure DevOps Pipeline → Azure AD (WIF) → JWT Token → Vault (Azure Auth) �
 export TF_VAR_azure_tenant_id=$(az account show --query tenantId -o tsv)
 export TF_VAR_azure_subscription_id=$(az account show --query id -o tsv)
 
-# Azure DevOps Configuration  
+# Azure DevOps Configuration
 export TF_VAR_azuredevops_org_service_url="https://dev.azure.com/your-organization"
 export TF_VAR_azuredevops_personal_access_token="your-azure-devops-pat-token"
 
@@ -58,10 +100,10 @@ terraform init
 terraform apply
 ```
 
-## 📋 What Gets Created
+## What Gets Created
 
 ### Azure Resources
-- **Azure AD Application** - Service Principal identity
+- **Microsoft Entra application** - Service principal identity
 - **Service Principal** - With Owner role on subscription  
 - **Federated Identity Credential** - Links to Azure DevOps service connection
 - **Role Assignment** - Owner permissions on subscription
@@ -82,7 +124,7 @@ terraform apply
 - **Pipeline Policy** - Read access to `secret/data/demo`
 - **Pipeline Role** - `ado-pipeline-role` bound to service principal object ID
 
-## 🔧 Key Configuration Details
+## Key Configuration Details
 
 ### Vault Role Configuration
 
@@ -120,20 +162,37 @@ JWT=$(az account get-access-token --resource https://management.core.windows.net
 vault write -format=json auth/ado/login role="ado-pipeline-role" jwt="$JWT"
 ```
 
-## 📝 Environment Variables & Variables
+The current template relies on the Azure CLI login created by `AzureCLI@2`, then asks Azure CLI for an Azure access token. If a pipeline needs direct access to the Workload Identity Federation token, `AzureCLI@2` can also expose the service connection identity values to the script:
+
+```yaml
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: '<service_endpoint_name>'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    addSpnToEnvironment: true
+    inlineScript: |
+      echo "Service principal: $servicePrincipalId"
+      echo "Tenant: $tenantId"
+      # The workload federation token is available as $idToken.
+```
+
+Use this option when the script needs the raw federated token or service principal metadata. It is not required for the default pipeline because `az account get-access-token` is enough for the Vault Azure auth flow used here.
+
+## Environment Variables and Terraform Variables
 
 ### Environment Variables (Recommended)
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `TF_VAR_azure_tenant_id` | Azure tenant ID | ✅ |
-| `TF_VAR_azure_subscription_id` | Azure subscription ID | ✅ |
-| `TF_VAR_azuredevops_org_service_url` | Azure DevOps organization URL | ✅ |
-| `TF_VAR_azuredevops_personal_access_token` | Azure DevOps PAT | ✅ |
+| `TF_VAR_azure_tenant_id` | Azure tenant ID | Yes |
+| `TF_VAR_azure_subscription_id` | Azure subscription ID | Yes |
+| `TF_VAR_azuredevops_org_service_url` | Azure DevOps organization URL | Yes |
+| `TF_VAR_azuredevops_personal_access_token` | Azure DevOps PAT | Yes |
 | `VAULT_ADDR` | HashiCorp Vault server URL | For Vault resources |
 | `VAULT_TOKEN` | Vault admin token | For Vault resources |
 | `VAULT_SKIP_VERIFY` | Skip TLS verification | For self-signed certs |
-| `TF_VAR_vault_addr` | Vault address for pipeline | Optional |
+| `TF_VAR_vault_addr` | Vault address rendered into the pipeline YAML | Required for pipeline runs |
 
 ### Terraform Variables
 
@@ -151,52 +210,55 @@ azuredevops_personal_access_token = "your-pat-token"
 # Project Configuration
 azuredevops_project_name = "vault-wif"
 project_visibility       = "private"
-service_endpoint_name    = "AzureRM Service Connection for Vault with Automatic WIF v2"
+service_endpoint_name    = "AzureRM Service Connection for Vault with Automatic WIF"
 
 # Vault Configuration
 vault_addr = "https://your-vault-server.com:8200"
 ```
 
-## 🔐 Creating Personal Access Token
+## Creating Personal Access Token
 
-1. Go to Azure DevOps → User Settings → Personal Access Tokens
+1. Go to Azure DevOps > User Settings > Personal Access Tokens
 2. Click "New Token"
 3. Set required scopes:
    - **Project and Team (Read & Write)** - To create projects
    - **Service Connections (Read & Write)** - To create service connections
    - **Build (Read & Write)** - To create pipelines
    - **Environment (Read & Write)** - To create environments
-4. Copy the token and set it as environment variable
+4. Copy the token and set it as `TF_VAR_azuredevops_personal_access_token`
 
-## 📚 Pipeline Templates
+## Pipeline Templates
 
-The repository includes several pipeline templates:
+The repository includes four pipeline templates, but Terraform only deploys one of them. The active pipeline is controlled in `ado-project.tf` by `yml_path = "simple-vault-pipeline.yml"`, and Terraform only writes `templates/simple-vault-pipeline.yml` into the generated Azure DevOps repository.
 
 ### 1. `simple-vault-pipeline.yml` (Primary)
 - Complete Vault authentication workflow
 - JWT token acquisition and validation
 - Secret retrieval with error handling
 - Token cleanup and security best practices
-- **Used by default** in the created build pipeline
+- Used by the created build pipeline
 
-### 2. `jwt-debug-pipeline.yml`
+### 2. `jwt-debug-pipeline.yml` (Unused debug template)
 - Decodes and displays JWT token contents
 - Useful for troubleshooting authentication issues
 - Shows token metadata and structure
+- Not uploaded to the generated Azure DevOps repository by Terraform
 
-### 3. `azure-pipelines.yml`
+### 3. `azure-pipelines.yml` (Unused advanced example)
 - Advanced pipeline with multiple authentication methods
 - Comprehensive error handling and fallback logic
 - Environment-specific configurations
+- Not referenced by the Terraform build definition
 
-### 4. `vault-auth-pipeline.yml`
+### 4. `vault-auth-pipeline.yml` (Unused auth example)
 - Focused on Vault authentication patterns
 - Different auth backend examples
 - Token management best practices
+- Not referenced by the Terraform build definition
 
-## 🛠️ Usage Example
+## Usage Example
 
-After deployment, the pipeline automatically uses the working configuration:
+After deployment, Terraform writes `simple-vault-pipeline.yml` into the created Azure DevOps repository and configures the build definition to use that file:
 
 ```yaml
 # The created simple-vault-pipeline.yml includes:
@@ -216,7 +278,7 @@ jobs:
   - task: AzureCLI@2
     displayName: 'Get Secret from Vault'
     inputs:
-      azureSubscription: 'AzureRM Service Connection for Vault with Automatic WIF v2'
+      azureSubscription: '<service_endpoint_name>'
       scriptType: 'bash'
       scriptLocation: 'inlineScript'
       inlineScript: |
@@ -234,7 +296,7 @@ jobs:
         vault token revoke -self
 ```
 
-## 🧹 Cleanup
+## Cleanup
 
 To remove all created resources:
 
@@ -243,20 +305,20 @@ terraform destroy
 ```
 
 This automatically removes:
-- Azure AD application and service principal
+- Microsoft Entra application and service principal
 - All role assignments
 - Azure DevOps project, repository, pipeline, and service connection
 - Vault auth backend, policies, and roles
 
 ## Agent Pool
 
-If you don't want to run Microsoft hosted agent pool, you can setup your own one by running either a VM on your laptop or somewhere in the cloud. 
+If you don't want to use a Microsoft-hosted agent pool, set up a self-hosted agent on a local VM or a cloud VM.
 
-Depending on what you will need in your pipeline, you may want to pre-install the tools on the VM. Currently I am running a Ubuntu 24 server on my Macbook with the `vault` package pre-installed so the pipeline will be able to run vault commands. I think this is better than having to install all the dependencies in the pipelines. 
+Depending on what the pipeline needs, pre-install the tools on the VM. For this pipeline, the agent should have the Vault CLI available so the `vault` commands can run without installing everything during each pipeline execution.
 
-You only need to setup the agent once as long as you keep using the same org, pool name and PAT.
+You only need to set up the agent once as long as you keep using the same org, pool name, and PAT.
 
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Authentication Failures
 
@@ -285,9 +347,9 @@ vault write auth/ado/role/ado-pipeline-role \
 
 ### Service Connection Issues
 
-1. **Wait for propagation** - Azure AD changes take 5-10 minutes
-2. **Check federated credential** in Azure Portal → App registrations
-3. **Verify issuer URL** matches Azure DevOps organization
+1. **Wait for propagation** - Microsoft Entra ID changes can take 5-10 minutes
+2. **Check federated credential** in Azure Portal > App registrations
+3. **Verify issuer, subject, and audience** match the service connection's Workload Identity Federation values
 
 ### Vault Connectivity Issues
 
@@ -297,21 +359,22 @@ vault write auth/ado/role/ado-pipeline-role \
 
 ### Permission Issues
 
-**For Azure AD operations**: Need "Application Administrator" role
+**For Microsoft Entra operations**: Need "Application Administrator" role
 **For Azure subscription**: Need "Owner" or "Contributor" role  
 **For Azure DevOps**: Need "Project Administrator" permissions
 
-## 🔒 Security Best Practices
+## Security Best Practices
 
 1. **Use Environment Variables** - Keep secrets out of code
-2. **Rotate PAT Tokens** - Set shorter expiration periods
-3. **Limit PAT Scopes** - Only grant required permissions
-4. **Monitor Service Principals** - Regularly audit permissions
-5. **Use Vault Policies** - Restrict secret access paths
-6. **Token Cleanup** - Always revoke Vault tokens after use
-7. **Network Security** - Restrict Vault access to pipeline agents
+2. **Protect Terraform State** - State can contain the Azure application password, Vault auth configuration details, and demo secret values
+3. **Rotate PAT Tokens** - Set shorter expiration periods
+4. **Limit PAT Scopes** - Only grant required permissions
+5. **Monitor Service Principals** - Regularly audit permissions
+6. **Use Vault Policies** - Restrict secret access paths
+7. **Token Cleanup** - Always revoke Vault tokens after use
+8. **Network Security** - Restrict Vault access to pipeline agents
 
-## 🌍 Multi-Environment Setup
+## Multi-Environment Setup
 
 For production deployments, consider:
 
@@ -329,7 +392,7 @@ resource "vault_azure_auth_backend_role" "ado_pipeline_role_prod" {
 }
 ```
 
-### Option 2: Azure AD Group-Based
+### Option 2: Microsoft Entra Group-Based
 ```hcl
 # Create groups for environments
 resource "azuread_group" "vault_prod_group" {
@@ -344,7 +407,7 @@ resource "vault_azure_auth_backend_role" "ado_pipeline_role_prod" {
 }
 ```
 
-## 📚 Additional Resources
+## Additional Resources
 
 - [HashiCorp Blog: Integrating Azure DevOps with Vault](https://www.hashicorp.com/en/blog/integrating-azure-devops-pipelines-with-hashicorp-vault)
 - [Vault Azure Auth Method](https://developer.hashicorp.com/vault/docs/auth/azure)
@@ -352,20 +415,20 @@ resource "vault_azure_auth_backend_role" "ado_pipeline_role_prod" {
 - [Azure DevOps Service Connections](https://docs.microsoft.com/en-us/azure/devops/pipelines/library/service-endpoints)
 - [Vault Policies](https://developer.hashicorp.com/vault/docs/concepts/policies)
 
-## 📋 File Structure
+## File Structure
 
 ```
 terraform/
-├── README.md                    # This file
-├── main.tf                      # Provider configurations
-├── variables.tf                 # Input variables
-├── outputs.tf                   # Output values
-├── azure-sp.tf                  # Azure AD resources
-├── ado-project.tf               # Azure DevOps resources  
-├── vault-config.tf              # Vault configuration
-└── templates/
-    ├── simple-vault-pipeline.yml    # Primary working template
-    ├── jwt-debug-pipeline.yml       # JWT debugging
-    ├── azure-pipelines.yml          # Advanced template
-    └── vault-auth-pipeline.yml      # Auth-focused template
+|-- README.md                    # This file
+|-- main.tf                      # Provider configurations
+|-- variables.tf                 # Input variables
+|-- outputs.tf                   # Output values
+|-- azure-sp.tf                  # Microsoft Entra resources
+|-- ado-project.tf               # Azure DevOps resources
+|-- vault-config.tf              # Vault configuration
+`-- templates/
+  |-- simple-vault-pipeline.yml    # Primary working template
+  |-- jwt-debug-pipeline.yml       # JWT debugging
+  |-- azure-pipelines.yml          # Advanced template
+  `-- vault-auth-pipeline.yml      # Auth-focused template
 ```
