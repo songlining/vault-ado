@@ -32,8 +32,9 @@ Terraform builds three connected parts of the integration:
 2. Azure DevOps requests a short-lived federated token for the service connection.
 3. Microsoft Entra ID exchanges that federated token for an Azure access token for the configured service principal.
 4. The pipeline passes the Azure access token to Vault's Azure auth backend.
-5. Vault validates the token, checks that it belongs to the bound service principal object ID, and returns a short-lived Vault token.
-6. The pipeline uses the Vault token to read the demo secret.
+5. Vault uses the Azure auth backend's configured client ID and client secret to validate the presented token with Microsoft Entra ID / Azure.
+6. Vault checks that the validated token belongs to the bound service principal object ID, then returns a short-lived Vault token.
+7. The pipeline uses the Vault token to read the demo secret.
 
 ```mermaid
 sequenceDiagram
@@ -51,9 +52,11 @@ sequenceDiagram
   Note over Entra: Match issuer, subject, and audience on app credential
   Entra-->>Pipeline: Azure access token for service principal
   Pipeline->>Vault: 4. Login to auth/ado with Azure access token
-  Note over Vault: 5. Validate token and bound service principal object ID
+  Vault->>Entra: 5. Validate token using configured client ID and secret
+  Entra-->>Vault: Token validation result and identity metadata
+  Note over Vault: 6. Check bound service principal object ID
   Vault-->>Pipeline: Short-lived Vault token
-  Pipeline->>Secret: 6. Read demo secret with Vault token
+  Pipeline->>Secret: 7. Read demo secret with Vault token
   Secret-->>Pipeline: Return secret data
 ```
 
@@ -71,15 +74,15 @@ JWT=$(az account get-access-token --resource https://management.core.windows.net
 
 The variable is named `JWT` because the Azure access token is JWT-formatted. In this default flow, it contains the Azure access token returned by Azure CLI, not the raw Azure DevOps federated token.
 
-- **Steps 4 and 5** happen when the script sends that Azure access token to Vault:
+- **Steps 4, 5, and 6** happen when the script sends that Azure access token to Vault:
 
 ```bash
 vault write -format=json auth/ado/login role="ado-pipeline-role" jwt="$JWT"
 ```
 
-Vault validates the token, checks that it belongs to the configured service principal object ID, and returns a Vault token.
+Vault uses its configured Azure auth backend client ID and client secret to validate the token with Microsoft Entra ID / Azure. It then checks that the validated token belongs to the configured service principal object ID and returns a Vault token.
 
-- **Step 6** is the secret read after the Vault token has been exported:
+- **Step 7** is the secret read after the Vault token has been exported:
 
 ```bash
 vault kv get secret/demo
