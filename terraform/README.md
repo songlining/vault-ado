@@ -92,6 +92,7 @@ vault kv get secret/demo
 - **Service principal binding in Vault** - The Vault role is bound to the service principal object ID, matching the `oid` claim in the Azure token.
 - **No subscription binding in Vault** - The Vault role intentionally leaves `bound_subscription_ids` empty for the Azure DevOps pipeline flow.
 - **Protect Terraform state** - Terraform creates an Azure application password for Vault's Azure auth backend and demo Vault secret data. Treat local and remote state as sensitive.
+- **TODO: Consider splitting service principals** - The current reference implementation uses one service principal for both Azure DevOps Workload Identity Federation and Vault Azure auth backend validation. A future hardening pass could use separate service principals so the password-bearing Vault validation identity is isolated from the passwordless ADO service connection identity.
 
 ## Quick Start
 
